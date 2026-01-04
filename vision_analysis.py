@@ -1,58 +1,67 @@
 import json
+import base64
+import io
+from PIL import Image
+import google.generativeai as genai
+import os
 
-# $0.01/1000 tokens
-VISION_PRICE_PER_TOKEN = 0.00001
-# 0.0005/1000 tokens
-GPT_3_5_TURBO_PRICE_PER_TOKEN = 0.0000005
+# Gemini pricing is significantly lower than GPT-4o
+# Flash 1.5 is ~$0.15 per million tokens for input
+VISION_PRICE_PER_TOKEN = 0.00000015 
+GPT_3_5_TURBO_PRICE_PER_TOKEN = 0.00000015
 
+def get_gemini_model():
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise ValueError("GOOGLE_API_KEY environment variable is not set. Please add it to your .env file.")
+    genai.configure(api_key=api_key)
+    # Using Pro for best summary quality, but Flash is also an option for speed/cost
+    model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+    return genai.GenerativeModel(model_name)
+
+def base64_to_pil(base64_str):
+    image_data = base64.b64decode(base64_str)
+    return Image.open(io.BytesIO(image_data))
 
 def analyze_images_with_gpt4_vision(
     character_profiles, pages, client, prompt, instructions, detail="low"
 ):
-    # Construct the messages including the prompt and images
-    messages = [
-        {"role": "system", "content": instructions},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Here are some character profile pages, for your reference:",
-                }
-            ]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in character_profiles
-            ],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": prompt}]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in pages
-            ],
-        },
+    """
+    Analyzes manga pages using Gemini Vision.
+    Kept the original function name to minimize changes in app.py.
+    """
+    model = get_gemini_model()
+    
+    # Construct contents for Gemini
+    # We include instructions, profile references, and the sequence of pages
+    contents = [
+        f"System Instructions: {instructions}\n\n",
+        "Here are some character profile pages, for your reference:",
     ]
-
-    response = client.chat.completions.create(
-        model="gpt-4o", messages=messages, max_tokens=4096
-    )
-
-    return response
-
+    contents.extend([base64_to_pil(img) for img in character_profiles])
+    contents.append(f"\nPrompt: {prompt}\n")
+    contents.extend([base64_to_pil(img) for img in pages])
+    
+    response = model.generate_content(contents)
+    
+    # Mocking OpenAI response structure to minimize app.py changes
+    class MockMessage:
+        def __init__(self, content):
+            self.content = content
+    class MockChoice:
+        def __init__(self, content):
+            self.message = MockMessage(content)
+    class MockUsage:
+        def __init__(self, tokens):
+            # Gemini counting is different, we'll return 0 for usage here 
+            # as it doesn't affect the narration/video pipeline
+            self.total_tokens = tokens
+    class MockResponse:
+        def __init__(self, content, tokens):
+            self.choices = [MockChoice(content)]
+            self.usage = MockUsage(tokens)
+            
+    return MockResponse(response.text, 0)
 
 def detect_important_pages(
     profile_reference,
@@ -63,231 +72,82 @@ def detect_important_pages(
     instructions,
     detail="low",
 ):
-    # Construct the messages including the prompt and images
-    messages = [
-        {"role": "system", "content": instructions},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Here are some character profile pages, for your reference:",
-                }
-            ]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in profile_reference
-            ],
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Here are some chapter start pages, for your reference:",
-                }
-            ]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in chapter_reference
-            ],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": prompt}]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in pages
-            ],
-        },
+    """Detect profile and chapter start pages using Gemini's JSON mode."""
+    model = get_gemini_model()
+    
+    contents = [
+        f"System Instructions: {instructions}\n\n",
+        "Here are some character profile pages, for your reference:"
     ]
-
-    response = client.chat.completions.create(
-        model="gpt-4o", messages=messages, max_tokens=4096
+    contents.extend([base64_to_pil(img) for img in profile_reference])
+    contents.append("\nHere are some chapter start pages, for your reference:")
+    contents.extend([base64_to_pil(img) for img in chapter_reference])
+    contents.append(f"\nPrompt: {prompt}\n")
+    contents.extend([base64_to_pil(img) for img in pages])
+    
+    # Enable JSON mode for structured output
+    response = model.generate_content(
+        contents,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+        )
     )
-    response_text = response.choices[0].message.content
-    tokens = response.usage.total_tokens
-
-    # parse response text json from response.choices[0].message.content into object
+    
+    response_text = response.text
     try:
-        # Extract the text content from the first choice's message (if structured as expected)
         parsed_response = json.loads(response_text)
-    except (AttributeError, IndexError, json.JSONDecodeError) as e:
-        # Handle cases where parsing fails or the structure is not as expected
-        print(f"Using GPT as a backup to format JSON object...")
-        response = completions(client, response_text, JSON_PARSE_PROMPT)
-        tokens += response.usage.total_tokens
-        try:
-            parsed_response = json.loads(response.choices[0].message.content)
-        except (AttributeError, IndexError, json.JSONDecodeError) as e:
-            parsed_response = None
-            print("Even after using GPT to parse the json, we failed. Fatal error.")
-            raise e
+    except json.JSONDecodeError:
+        # Simple extraction if JSON mode fails for some reason
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            parsed_response = json.loads(json_match.group())
+        else:
+            print("Failed to parse JSON from Gemini response.")
+            raise
 
     return {
-        "total_tokens": tokens,
-        "parsed_response": parsed_response["important_pages"],
+        "total_tokens": 0,
+        "parsed_response": parsed_response.get("important_pages", []),
     }
-
-
-def completions(client, text, prompt):
-    messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": [{"type": "text", "text": text}]},
-    ]
-
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo-0125",
-        messages=messages,
-        max_tokens=4096,
-        response_format={"type": "json_object"},
-    )
-
-    return response
-
 
 def get_important_panels(
     profile_reference, panels, client, prompt, instructions, detail="low"
 ):
-    # Construct the messages including the prompt and images
-    messages = [
-        {"role": "system", "content": instructions},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Here are some character profile pages, for your reference:",
-                }
-            ]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in profile_reference
-            ],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": prompt}]
-            + [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                        "detail": detail,
-                    },
-                }
-                for img_base64 in panels
-            ],
-        },
+    """Identify key panels using Gemini."""
+    model = get_gemini_model()
+    
+    contents = [
+        f"System Instructions: {instructions}\n\n",
+        "Here are some character profile pages, for your reference:"
     ]
+    contents.extend([base64_to_pil(img) for img in profile_reference])
+    contents.append(f"\nPrompt: {prompt}\n")
+    contents.extend([base64_to_pil(img) for img in panels])
+    
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o", messages=messages, max_tokens=4096
-        )
-    except Exception as e:
-        if "content_policy_violation" in str(e):
-            print(
-                "The input image may contain content that is not allowed by OpenAI's safety system."
+        response = model.generate_content(
+            contents,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
             )
-            return {"total_tokens": 0, "parsed_response": []}
-        if "rate_limit_exceeded" in str(e):
-            print("Rate limit exceeded. Please wait a few minutes before trying again.")
-            return {"total_tokens": 0, "parsed_response": []}
-        else:
-            raise e
+        )
+        response_text = response.text
+    except Exception as e:
+        print(f"Gemini Error during panel identification: {e}")
+        return {"total_tokens": 0, "parsed_response": []}
 
-    response_text = response.choices[0].message.content
-    print("GPT RESPONSE:", response_text)
-    tokens = response.usage.total_tokens
-
-    # parse response text json from response.choices[0].message.content into object
     try:
-        # Extract the text content from the first choice's message (if structured as expected)
         parsed_response = json.loads(response_text)
-    except (AttributeError, IndexError, json.JSONDecodeError) as e:
-        # Handle cases where parsing fails or the structure is not as expected
-        print(f"Using GPT as a backup to format JSON object...")
-        response = completions(client, response_text, JSON_PARSE_PROMPT_PANELS)
-        tokens += response.usage.total_tokens
-        try:
-            parsed_response = json.loads(response.choices[0].message.content)
-        except (AttributeError, IndexError, json.JSONDecodeError) as e:
-            parsed_response = None
-            print("Even after using GPT to parse the json, we failed. Fatal error.")
-            raise e
+    except json.JSONDecodeError:
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            parsed_response = json.loads(json_match.group())
+        else:
+            parsed_response = {"important_panels": []}
 
     return {
-        "total_tokens": tokens,
-        "parsed_response": parsed_response["important_panels"],
+        "total_tokens": 0,
+        "parsed_response": parsed_response.get("important_panels", []),
     }
-
-
-JSON_PARSE_PROMPT = """
-You are a JSON parser. Return a properly formatted json object based on the input from the user.
-Your response must be in the following format:
-{"important_pages": Array<{"image_index": int 0-19, "type": "profile" | "chapter"}>}
-
-Examples of valid responses:
-```
-{
-    "important_pages": [
-        {"image_index": 0, "type": "profile"},
-        {"image_index": 17, "type": "chapter"}
-    ]
-}
-```
-
-```
-{
-    "important_pages": []
-}
-```
-
-"""
-
-
-JSON_PARSE_PROMPT_PANELS = """
-You are a JSON parser. Return a properly formatted json object based on the input from the user.
-Your response must be in the following format:
-{"important_panels": Array<int>}
-
-Examples of valid responses:
-```
-{
-    "important_panels": [
-        0, 4,
-    ]
-}
-```
-
-```
-{
-    "important_panels": []
-}
-```
-
-"""

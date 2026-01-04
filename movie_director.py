@@ -1,10 +1,11 @@
+import os
+import requests
+import httpx
 import base64
 from io import BytesIO
 import asyncio
 from PIL import Image
 import numpy as np
-import os
-import io
 from moviepy import (
     ImageClip,
     concatenate_videoclips,
@@ -13,37 +14,53 @@ from moviepy import (
 )
 import moviepy as mpe
 
-
-async def make_movie(movie_script, manga, volume_number, narration_client):
+async def make_movie(movie_script, manga, volume_number, narration_client=None):
     print("Narrating movie script...")
-    await add_narrations_to_script(movie_script, narration_client)
+    await add_narrations_to_script(movie_script)
     print("Editing movie together...")
     create_movie_from_script(movie_script, manga, volume_number)
     print("Movie created successfully!")
     return True
 
 
-# Function to generate and update movie script with narrations
-async def add_narrations_to_script(script, client):
+# Function to generate and update movie script with narrations using OpenAI-compatible TTS (Edge TTS)
+async def add_narrations_to_script(script):
+    TTS_API_BASE_URL = os.getenv("TTS_API_BASE_URL", "http://localhost:5050/v1")
+    TTS_API_KEY = os.getenv("TTS_API_KEY", "sk-local-tts-key")
+    TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
+    TTS_VOICE = os.getenv("TTS_VOICE", "alloy")
+
     semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent requests
 
-    async def fetch_narration(entry):
-        async with semaphore:
-            audio_bytes_io = BytesIO()
-            # Since convert is an async generator, we use async for to iterate over it
-            async for audio_bytes in client.text_to_speech.convert(
-                text=entry["text"],
-                voice_id="pNInz6obpgDQGcFmaJgB",  # Replace with your chosen voice ID
-            ):
-                audio_bytes_io.write(audio_bytes)
-            # After collecting all bytes, we can optionally seek to the start
-            audio_bytes_io.seek(0)
-            # Assign the BytesIO object to the entry's "narration" field
-            entry["narration"] = audio_bytes_io
-            # Print the length of bytes after writing all chunks
-            print("got bytes:", audio_bytes_io.getbuffer().nbytes)
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async def fetch_narration(entry):
+            async with semaphore:
+                url = f"{TTS_API_BASE_URL}/audio/speech"
+                if "/v1/v1" in url: # Handle potential double /v1 if user provides base with /v1
+                    url = url.replace("/v1/v1", "/v1")
+                
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {TTS_API_KEY}",
+                }
+                payload = {
+                    "model": TTS_MODEL,
+                    "input": entry["text"],
+                    "voice": TTS_VOICE,
+                    "response_format": "mp3",
+                }
+                
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                
+                audio_bytes_io = BytesIO(response.content)
+                audio_bytes_io.seek(0)
+                # Assign the BytesIO object to the entry's "narration" field
+                entry["narration"] = audio_bytes_io
+                # Print the length of bytes after writing all chunks
+                print("got bytes:", len(response.content))
 
-    await asyncio.gather(*[fetch_narration(entry) for entry in script])
+        await asyncio.gather(*[fetch_narration(entry) for entry in script])
 
 
 def create_movie_from_script(script, manga, volume_number):

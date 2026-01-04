@@ -1,8 +1,8 @@
-# Manga Recap with GPT-4 Vision
+# Manga Recap with Gemini 1.5 Flash
 
 ## Project Overview
 
-This project aims to generate summaries of manga volumes by analyzing images extracted from PDF files of the manga. It uses the GPT-4 Vision API to understand the content of manga pages and produce compelling, story-telling tone summaries. The project processes PDFs to extract images, scales them to a specific size, encodes them in base64, and then uses these images as input for the GPT-4 Vision API alongside custom prompts to generate summaries. Once a summary is generated, it is sent to ElevenLabs API for narration. The resulting narration and relevant panel images are then combined to create a video recap summarizing the volume.
+This project aims to generate summaries of manga volumes by analyzing images extracted from PDF files of the manga. It uses the Google Gemini 1.5 Flash API to understand the content of manga pages and produce compelling, story-telling tone summaries. The project processes PDFs to extract images, scales them to a specific size, encodes them in base64, and then uses these images as input for Gemini alongside custom prompts to generate summaries. Once a summary is generated, it is sent to an OpenAI-compatible TTS server (e.g., openai-edge-tts) for narration. The resulting narration and relevant panel images are then combined to create a video recap summarizing the volume.
 
 Join the Discord: https://discord.gg/MMqcuDe2WZ
 
@@ -11,10 +11,10 @@ https://github.com/pashpashpash/manga-reader/assets/20898225/debb0c15-3579-477c-
 ## Features
 
 - PDF processing to extract manga pages as images as well as panel extraction from within pages.
-- Image scaling to fit the requirements of the GPT-4 Vision API.
+- Image scaling to fit the requirements of the Gemini Vision API.
 - Base64 encoding of images for API submission.
 - Generating text summaries of manga volumes in a story-telling tone.
-- Narration of the generated summaries using the ElevenLabs API.
+- Narration of the generated summaries using an OpenAI-compatible TTS API (travisvn/openai-edge-tts).
 - Video creation from the narration and relevant panel images/pages.
 
 ## Prerequisites
@@ -47,11 +47,14 @@ pip3 install -r requirements.txt
 
 4. Set Up Environment Variables
 
-Create a .env file in the root directory of your project. Add your OpenAI API key to this file:
+Create a .env file in the root directory of your project. Add your API keys and TTS configuration:
 
 ```
-OPENAI_API_KEY=your_openai_api_key_here
-ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+GOOGLE_API_KEY=your_google_api_key_here
+TTS_API_BASE_URL=http://localhost:5050/v1
+TTS_API_KEY=sk-local-tts-key
+TTS_MODEL=tts-1
+TTS_VOICE=alloy
 ```
 
 5. Prepare Your Manga PDFs

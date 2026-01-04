@@ -1,6 +1,4 @@
 from dotenv import load_dotenv
-from openai import OpenAI
-from elevenlabs.client import AsyncElevenLabs
 import asyncio
 import json
 import os
@@ -35,9 +33,6 @@ from prompts import (
 from citation_processing import extract_text_and_citations, extract_script
 from movie_director import make_movie
 
-from openai import APIError, RateLimitError
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 load_dotenv()  # Load environment variables from .env file
 
 def write_text_to_file(movie_script, manga, volume_number):
@@ -54,26 +49,11 @@ def write_text_to_file(movie_script, manga, volume_number):
     
     print(f"Extracted text has been written to {output_file}")
 
-@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=10))
-def retry_api_call(func, *args, **kwargs):
-    try:
-        return func(*args, **kwargs)
-    except RateLimitError as e:
-        print(f"Rate limit reached. Retrying in a moment...")
-        raise e
-    except APIError as e:
-        if "rate limit" in str(e).lower():
-            print(f"API error related to rate limit. Retrying...")
-            raise RateLimitError(str(e))
-        raise e
 
 async def main(volume_number, manga, text_only=False):
-    # Initialize OpenAI client with API key
-    client = OpenAI()
-    # Only initialize ElevenLabs client if we're not in text-only mode
+    # Gemini and domestic TTS server don't need a specific 'client' object passed around like OpenAI's
+    client = None
     narration_client = None
-    if not text_only:
-        narration_client = AsyncElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
     print("Extracting all pages from the volume...")
     volume_scaled_and_unscaled = extract_all_pages_as_images(
@@ -104,12 +84,11 @@ async def main(volume_number, manga, text_only=False):
     print("Identifying important pages in the volume...")
 
     def process_batch(start_idx, pages):
-        response = retry_api_call(
-            detect_important_pages,
+        response = detect_important_pages(
             profile_reference,
             chapter_reference,
             pages,
-            client,
+            None,
             KEY_PAGE_IDENTIFICATION_INSTRUCTIONS,
             KEY_PAGE_IDENTIFICATION_INSTRUCTIONS,
         )
@@ -161,9 +140,8 @@ async def main(volume_number, manga, text_only=False):
     jobs = jobs["scaled_images"]
 
     # Summarize the images in the first job
-    response = retry_api_call(
-        analyze_images_with_gpt4_vision,
-        character_profiles, jobs[0], client, BASIC_PROMPT, BASIC_INSTRUCTIONS
+    response = analyze_images_with_gpt4_vision(
+        character_profiles, jobs[0], None, BASIC_PROMPT, BASIC_INSTRUCTIONS
     )
     recap = response.choices[0].message.content
     tokens = response.usage.total_tokens
@@ -178,11 +156,10 @@ async def main(volume_number, manga, text_only=False):
     for i, job in enumerate(jobs):
         if i == 0:
             continue
-        response = retry_api_call(
-            analyze_images_with_gpt4_vision,
+        response = analyze_images_with_gpt4_vision(
             character_profiles,
             job,
-            client,
+            None,
             recap + "\n-----\n" + BASIC_PROMPT_WITH_CONTEXT,
             BASIC_INSTRUCTIONS,
         )
@@ -247,11 +224,10 @@ async def main(volume_number, manga, text_only=False):
 
         scaled_panels = [scale_base64_image(p) for p in panels]
 
-        response = retry_api_call(
-            get_important_panels,
+        response = get_important_panels(
             profile_reference,
             scaled_panels,
-            client,
+            None,
             segment["text"] + "\n________\n" + KEY_PANEL_IDENTIFICATION_PROMPT,
             KEY_PANEL_IDENTIFICATION_INSTRUCTIONS,
         )
@@ -292,7 +268,7 @@ async def main(volume_number, manga, text_only=False):
             movie_script[i]["important_panels"] = ip
             panel_tokens += tokens
 
-    ELEVENLABS_PRICE_PER_CHARACTER = 0.0003
+    TTS_PRICE_PER_CHARACTER = 0.0000  # Local TTS is free!
     print(
         "Tokens for extracting profiles and chapters:",
         important_page_tokens,
@@ -322,17 +298,17 @@ async def main(volume_number, manga, text_only=False):
     if not text_only:
         narration_script = extract_script(movie_script)
         print(
-            "Total elevenlabs characters:",
+            "Total TTS characters:",
             len(narration_script),
             " | ",
-            "${:,.4f}".format(ELEVENLABS_PRICE_PER_CHARACTER * (len(narration_script))),
+            "${:,.4f}".format(TTS_PRICE_PER_CHARACTER * (len(narration_script))),
         )
         print(
             "GRAND TOTAL COST",
             " | ",
             "${:,.4f}".format(
                 VISION_PRICE_PER_TOKEN * (total_gpt_tokens)
-                + ELEVENLABS_PRICE_PER_CHARACTER * (len(narration_script))
+                + TTS_PRICE_PER_CHARACTER * (len(narration_script))
             ),
         )
     else:
